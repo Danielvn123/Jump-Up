@@ -8,7 +8,6 @@ import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.g2d.BitmapFont;
 import com.badlogic.gdx.graphics.g2d.GlyphLayout;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
-import com.badlogic.gdx.graphics.g2d.TextureRegion;
 import com.badlogic.gdx.math.MathUtils;
 import com.badlogic.gdx.math.Rectangle;
 import com.badlogic.gdx.utils.Array;
@@ -20,7 +19,6 @@ public class PantallaJuego implements Screen {
     private OrthographicCamera cam;
 
     private Texture fondorosa, ruinas, plataformaTex;
-    private TextureRegion plataformaRegion;
 
     private Texture personajeIdle, personajeIzq, personajeDer;
     private Texture personajeActual;
@@ -35,28 +33,36 @@ public class PantallaJuego implements Screen {
 
     // Física
     private float gravedad = -900f;
-    private float salto = 720f;
-    private float saltoInicial = 720f;
+    private float salto = 760f;
+    private float saltoInicial = 900;
 
     // Teclado
     private float velocidadX = 360f;
     private float velocidadXBoost = 520f;
 
-    // Bordes laterales (zona jugable)
+    // Bordes laterales (zona jugable personaje)
     private float margenLateralPct = 0.12f;
     private float limiteIzq, limiteDer;
 
-    // Cámara (mantener abajo)
+    // Cámara
     private float desiredScreenY = 120f;
 
-    private float playMinX, playMaxX; // bordes reales del “campo” (fondo)
+    // Bordes reales del fondo
+    private float playMinX, playMaxX;
 
-    // Plataformas (rectángulos para colisión + X base)
+    // Plataformas
     private Array<Rectangle> plataformas = new Array<>();
-    private Array<Float> plataformaBaseX = new Array<>();
 
-    // Separación vertical para infinito
-    private float separacionPlataformas = 240f;
+    // ✅ MÁS PLATAFORMAS Y MÁS JUNTAS
+    private int NUM_PLATAFORMAS = 28;         // más cantidad
+    private float separacionPlataformas = 115f; // más cerca
+    private float separacionRandom = 35f;
+
+    // ✅ 3 zonas (izq/centro/der) con random dentro
+    private int NUM_ZONAS = 3;
+    private float jitterZona = 45f; // random dentro de la zona
+
+    private Rectangle rectPersonaje = new Rectangle();
 
     // Tamaño plataforma
     private float escalaPlataforma = 0.55f;
@@ -65,34 +71,33 @@ public class PantallaJuego implements Screen {
     private BitmapFont font;
     private float maxAltura = 0;
 
-    // ===== HUD SCORE con imagen =====
+    // HUD SCORE
     private OrthographicCamera hudCam;
     private Texture scoreUI;
     private GlyphLayout layout;
 
-    // ✅ HUD dentro de los bordes del fondo y pegado arriba
-    private float SCORE_UI_SCALE = 0.35f;      // tamaño del banner
-    private float SCORE_NUM_OFFSET_X = 0.65f;  // ajusta fino
-    private float SCORE_NUM_OFFSET_Y = 0.51f;  // ajusta fino
-    private float HUD_INNER_MARGIN_X = 0f;     // 0 = pegado al borde izquierdo del fondo
-    private float HUD_INNER_MARGIN_Y = 0f;     // 0 = pegado arriba
-    private float HUD_EXTRA_UP = 0f;           // si tu PNG tiene margen transparente: -4f, -6f...
+    private float SCORE_UI_SCALE = 0.35f;
+    private float SCORE_NUM_OFFSET_X = 0.55f;
+    private float SCORE_NUM_OFFSET_Y = 0.92f;
+    private float HUD_INNER_MARGIN_X = 0f;
+    private float HUD_INNER_MARGIN_Y = 0f;
+    private float HUD_EXTRA_UP = 0f;
 
     private Main game;
 
-    // Conversión coords de GIMP -> mundo
+    // Fondo escala por alto
     private float IMG_W, IMG_H;
     private float scaleFondo = 1f;
     private float xOffsetFondo = 0f;
 
-    // ===== RECORTE de UNA plataforma dentro de plataformaruinas.png =====
-    private int PLAT_SRC_X = 0;
-    private int PLAT_SRC_Y = 0;
-    private int PLAT_SRC_W = 256;
-    private int PLAT_SRC_H = 175;
-
-    // Si tu ruinas.png ya trae plataformas pintadas y se ve duplicado, ponlo en false
     private boolean dibujarRuinas = true;
+
+    // Inicio por toque
+    private boolean juegoIniciado = false;
+
+    // Anti doble salto
+    private float tiempoDesdeUltimoSalto = 999f;
+    private final float COOLDOWN_SALTO = 0.10f;
 
     public PantallaJuego(Main game) {
         this.game = game;
@@ -110,20 +115,17 @@ public class PantallaJuego implements Screen {
         cam.position.set(pantallaAncho / 2f, pantallaAlto / 2f, 0);
         cam.update();
 
-        // ===== HUD camera (fija en pantalla) =====
         hudCam = new OrthographicCamera();
         hudCam.setToOrtho(false, pantallaAncho, pantallaAlto);
         hudCam.update();
 
-        // Bordes laterales (si los sigues usando para el personaje)
+        // Bordes personaje (por % pantalla)
         limiteIzq = pantallaAncho * margenLateralPct;
         limiteDer = pantallaAncho * (1f - margenLateralPct);
 
         fondorosa = new Texture("fondorosa.png");
         ruinas = new Texture("ruinas.png");
-
-        plataformaTex = new Texture("plataformaruinas.png");
-        plataformaRegion = new TextureRegion(plataformaTex, PLAT_SRC_X, PLAT_SRC_Y, PLAT_SRC_W, PLAT_SRC_H);
+        plataformaTex = new Texture("plataformasola.png");
 
         personajeIdle = new Texture("personaje.png");
         personajeDer = new Texture("personajederecha.png");
@@ -133,28 +135,16 @@ public class PantallaJuego implements Screen {
         anchoPersonaje = personajeIdle.getWidth() * 0.5f;
         altoPersonaje = personajeIdle.getHeight() * 0.5f;
 
-        xPersonaje = (pantallaAncho - anchoPersonaje) / 2f;
-        xPersonaje = clampZonaJugable(xPersonaje, anchoPersonaje);
-
-        yPersonaje = 0f;
-        yAnteriorPersonaje = yPersonaje;
-        velocidadY = saltoInicial;
-
-        // Fuente + layout para medir texto
         font = new BitmapFont();
         font.getData().setScale(1.2f);
         layout = new GlyphLayout();
 
-        // Imagen del score (ponla en android/assets/score.png)
         scoreUI = new Texture("score.png");
 
-        maxAltura = yPersonaje;
-
-        // Tamaño real del PNG para conversión
+        // Bordes reales del fondo (ruinas por ALTO)
         IMG_W = ruinas.getWidth();
         IMG_H = ruinas.getHeight();
 
-        // Escala/offset (ajustado por ALTO)
         scaleFondo = pantallaAlto / IMG_H;
         float anchoEscalado = IMG_W * scaleFondo;
         xOffsetFondo = (pantallaAncho - anchoEscalado) / 2f;
@@ -162,77 +152,58 @@ public class PantallaJuego implements Screen {
         playMinX = xOffsetFondo;
         playMaxX = xOffsetFondo + anchoEscalado;
 
-        crearPlataformasDesdeGimp();
-        ajustarPlataformasAlSuelo(60f);
-        calcularSeparacionDesdePlataformas();
+        // Personaje inicial abajo quieto
+        xPersonaje = (pantallaAncho - anchoPersonaje) / 2f;
+        xPersonaje = clampZonaJugable(xPersonaje, anchoPersonaje);
+
+        yPersonaje = 0f;
+        yAnteriorPersonaje = yPersonaje;
+        velocidadY = 0f;
+
+        maxAltura = yPersonaje;
+
+        // Plataformas
+        crearPlataformasIniciales();
+
+        juegoIniciado = false;
+        tiempoDesdeUltimoSalto = 999f;
     }
 
-    private void crearPlataformasDesdeGimp() {
+    // ✅ Primera plataforma MUY cerca del personaje + muchas plataformas arriba
+    private void crearPlataformasIniciales() {
         plataformas.clear();
-        plataformaBaseX.clear();
 
-        addPlataformaGimp(57, 57, 105, 73);
-        addPlataformaGimp(447, 68, 86, 66);
-        addPlataformaGimp(267, 207, 96, 68);
-        addPlataformaGimp(71, 340, 84, 75);
-        addPlataformaGimp(412, 401, 94, 97);
-        addPlataformaGimp(104, 584, 69, 86);
-        addPlataformaGimp(409, 663, 108, 82);
-        addPlataformaGimp(172, 833, 83, 81);
-    }
+        float platW = plataformaTex.getWidth() * escalaPlataforma;
+        float platH = plataformaTex.getHeight() * escalaPlataforma;
 
-    private void addPlataformaGimp(float xG, float yG, float wG, float hG) {
-        float yLib = IMG_H - yG - hG;
+        float areaW = (playMaxX - playMinX);
+        float zonaW = areaW / NUM_ZONAS;
 
-        float x = xG * scaleFondo + xOffsetFondo;
-        float y = yLib * scaleFondo;
+        // primera plataforma justo encima del personaje (muy cerca para empezar)
+        float y = yPersonaje + 25f; // prueba 20f..40f
 
-        float w = plataformaRegion.getRegionWidth() * escalaPlataforma;
-        float h = plataformaRegion.getRegionHeight() * escalaPlataforma;
+        // primera: centro
+        float xFirst = xEnZona(1, zonaW, platW);
+        plataformas.add(new Rectangle(xFirst, y, platW, platH));
+        y += separacionPlataformas + MathUtils.random(-separacionRandom, separacionRandom);
 
-        // Evitar que se salga de los bordes del fondo
-        x = clampPlataformaX(x, w);
-
-        Rectangle r = new Rectangle(x, y, w, h);
-        plataformas.add(r);
-        plataformaBaseX.add(x);
-    }
-
-    private float clampPlataformaX(float x, float w) {
-        float min = playMinX;
-        float max = playMaxX - w - 1f;
-        return MathUtils.clamp(x, min, max);
-    }
-
-    private void ajustarPlataformasAlSuelo(float desiredMinY) {
-        if (plataformas.size == 0) return;
-
-        float minY = Float.MAX_VALUE;
-        for (Rectangle p : plataformas) minY = Math.min(minY, p.y);
-
-        float shift = desiredMinY - minY;
-        for (Rectangle p : plataformas) p.y += shift;
-    }
-
-    private void calcularSeparacionDesdePlataformas() {
-        if (plataformas.size < 2) return;
-
-        Array<Float> ys = new Array<>();
-        for (Rectangle p : plataformas) ys.add(p.y);
-        ys.sort();
-
-        float sum = 0f;
-        int count = 0;
-        for (int i = 1; i < ys.size; i++) {
-            float d = ys.get(i) - ys.get(i - 1);
-            if (d > 0) { sum += d; count++; }
+        // resto
+        for (int i = 1; i < NUM_PLATAFORMAS; i++) {
+            int zona = MathUtils.random(0, NUM_ZONAS - 1);
+            float x = xEnZona(zona, zonaW, platW);
+            plataformas.add(new Rectangle(x, y, platW, platH));
+            y += separacionPlataformas + MathUtils.random(-separacionRandom, separacionRandom);
         }
+    }
 
-        if (count > 0) {
-            separacionPlataformas = (sum / count) + 80f;
-        } else {
-            separacionPlataformas = plataformaRegion.getRegionHeight() * escalaPlataforma + 200f;
-        }
+    private float xEnZona(int zona, float zonaW, float platW) {
+        float zonaStart = playMinX + zona * zonaW;
+        float zonaCenter = zonaStart + zonaW / 2f;
+
+        float x = zonaCenter - platW / 2f;
+        x += MathUtils.random(-jitterZona, jitterZona);
+
+        return MathUtils.clamp(x, playMinX, playMaxX - platW);
     }
 
     @Override
@@ -240,77 +211,119 @@ public class PantallaJuego implements Screen {
         delta = Math.min(delta, 1f / 30f);
         ScreenUtils.clear(0, 0, 0, 1);
 
-        float v = (Gdx.input.isKeyPressed(Input.Keys.SHIFT_LEFT) || Gdx.input.isKeyPressed(Input.Keys.SHIFT_RIGHT))
-            ? velocidadXBoost : velocidadX;
+        tiempoDesdeUltimoSalto += delta;
 
-        boolean izq = Gdx.input.isKeyPressed(Input.Keys.A) || Gdx.input.isKeyPressed(Input.Keys.LEFT);
-        boolean der = Gdx.input.isKeyPressed(Input.Keys.D) || Gdx.input.isKeyPressed(Input.Keys.RIGHT);
-
-        if (izq && !der) {
-            xPersonaje -= v * delta;
-            personajeActual = personajeIzq;
-        } else if (der && !izq) {
-            xPersonaje += v * delta;
-            personajeActual = personajeDer;
-        } else {
-            personajeActual = personajeIdle;
+        // Inicio por toque
+        if (!juegoIniciado && Gdx.input.justTouched()) {
+            juegoIniciado = true;
+            velocidadY = saltoInicial;
+            tiempoDesdeUltimoSalto = COOLDOWN_SALTO;
         }
 
-        xPersonaje = clampZonaJugable(xPersonaje, anchoPersonaje);
+        if (juegoIniciado) {
 
-        yAnteriorPersonaje = yPersonaje;
-        velocidadY += gravedad * delta;
-        yPersonaje += velocidadY * delta;
+            // Controles
+            float v = (Gdx.input.isKeyPressed(Input.Keys.SHIFT_LEFT) || Gdx.input.isKeyPressed(Input.Keys.SHIFT_RIGHT))
+                ? velocidadXBoost : velocidadX;
 
-        if (velocidadY < 0) {
-            float pieAnterior = yAnteriorPersonaje;
-            float pieActual = yPersonaje;
+            boolean izq = Gdx.input.isKeyPressed(Input.Keys.A) || Gdx.input.isKeyPressed(Input.Keys.LEFT);
+            boolean der = Gdx.input.isKeyPressed(Input.Keys.D) || Gdx.input.isKeyPressed(Input.Keys.RIGHT);
 
-            float xIzq = xPersonaje;
-            float xDer = xPersonaje + anchoPersonaje;
+            if (izq && !der) {
+                xPersonaje -= v * delta;
+                personajeActual = personajeIzq;
+            } else if (der && !izq) {
+                xPersonaje += v * delta;
+                personajeActual = personajeDer;
+            } else {
+                personajeActual = personajeIdle;
+            }
 
-            float toleranciaY = 20f;
+            xPersonaje = clampZonaJugable(xPersonaje, anchoPersonaje);
 
-            for (Rectangle p : plataformas) {
-                float top = p.y + p.height;
+            // Física
+            yAnteriorPersonaje = yPersonaje;
+            velocidadY += gravedad * delta;
+            yPersonaje += velocidadY * delta;
 
-                boolean solapaX = (xDer > p.x) && (xIzq < p.x + p.width);
-                boolean aterriza = (pieAnterior >= top) && (pieActual <= top + toleranciaY);
+            rectPersonaje.set(xPersonaje, yPersonaje, anchoPersonaje, altoPersonaje);
 
-                if (solapaX && aterriza) {
-                    yPersonaje = top;
-                    velocidadY = salto;
-                    break;
+
+            // ✅ Colisión robusta: SOLO cuando cae y cruza el TOP
+            // ✅ Colisión MUY fiable: solo rebota si está cayendo y cruza el top de la plataforma
+            if (velocidadY <= 0 && tiempoDesdeUltimoSalto >= COOLDOWN_SALTO) {
+
+                // “Pie” del personaje: yPersonaje (porque dibujas desde abajo-izquierda)
+                float prevBottom = yAnteriorPersonaje;
+                float currBottom = yPersonaje;
+
+                // Tolerancia basada en lo que cayó este frame (evita “atravesar” plataformas con delta grande)
+                float fallDist = prevBottom - currBottom; // positivo cuando cae
+                float tolY = Math.max(10f, fallDist + 4f);
+
+                // Margen horizontal para que no cuente con “rozar” la esquina
+                float xL = xPersonaje + 8f;
+                float xR = xPersonaje + anchoPersonaje - 8f;
+
+                for (Rectangle p : plataformas) {
+
+                    float pTop = p.y + p.height;  // top real de la plataforma
+
+                    boolean overlapX = (xR > p.x) && (xL < p.x + p.width);
+
+                    // Cruza el top de arriba hacia abajo en este frame (con tolerancia)
+                    boolean crossesTop = (prevBottom >= pTop) && (currBottom <= pTop + tolY);
+
+                    if (overlapX && crossesTop) {
+
+                        // Coloca al personaje encima (un pelín arriba para evitar re-colisión por redondeo)
+                        yPersonaje = pTop + 0.5f;
+
+                        // Rebote
+                        velocidadY = salto;
+
+                        tiempoDesdeUltimoSalto = 0f;
+                        break;
+                    }
                 }
             }
-        }
 
-        if (yPersonaje < 0) {
-            yPersonaje = 0;
-            if (velocidadY < 0) velocidadY = 0;
-            if (velocidadY == 0) velocidadY = saltoInicial;
-        }
+            if (yPersonaje > maxAltura) maxAltura = yPersonaje;
 
-        if (yPersonaje > maxAltura) maxAltura = yPersonaje;
+            // Cámara
+            float targetCamY = yPersonaje - desiredScreenY + (pantallaAlto / 2f);
+            float minCamY = pantallaAlto / 2f;
+            targetCamY = Math.max(targetCamY, minCamY);
 
-        float targetCamY = yPersonaje - desiredScreenY + (pantallaAlto / 2f);
-        float minCamY = pantallaAlto / 2f;
-        targetCamY = Math.max(targetCamY, minCamY);
+            if (targetCamY > cam.position.y) {
+                cam.position.y = targetCamY;
+                cam.update();
+            }
 
-        if (targetCamY > cam.position.y) {
-            cam.position.y = targetCamY;
+            // Reciclado infinito
+            reciclarPlataformas();
+
+            // ✅ GAME OVER si cae abajo (sin rebote en el suelo)
+            float camBottomVisible = cam.position.y - pantallaAlto / 2f;
+            if (yPersonaje + altoPersonaje < camBottomVisible) {
+                game.setScreen(new PantallaMenu(game));
+                return;
+            }
+
+        } else {
+            // Antes de empezar: quieto abajo
+            personajeActual = personajeIdle;
+            xPersonaje = (pantallaAncho - anchoPersonaje) / 2f;
+            xPersonaje = clampZonaJugable(xPersonaje, anchoPersonaje);
+            yPersonaje = 0f;
+            yAnteriorPersonaje = yPersonaje;
+            velocidadY = 0f;
+
+            cam.position.set(pantallaAncho / 2f, pantallaAlto / 2f, 0);
             cam.update();
         }
 
-        reciclarPlataformasPatronFijo();
-
-        float camBottomVisible = cam.position.y - pantallaAlto / 2f;
-        if (yPersonaje + altoPersonaje < camBottomVisible) {
-            game.setScreen(new PantallaMenu(game));
-            return;
-        }
-
-        // ===== DIBUJO MUNDO =====
+        // ===== MUNDO =====
         batch.setProjectionMatrix(cam.combined);
         batch.begin();
 
@@ -321,14 +334,14 @@ public class PantallaJuego implements Screen {
         }
 
         for (Rectangle p : plataformas) {
-            batch.draw(plataformaRegion, p.x, p.y, p.width, p.height);
+            batch.draw(plataformaTex, p.x, p.y, p.width, p.height);
         }
 
         batch.draw(personajeActual, xPersonaje, yPersonaje, anchoPersonaje, altoPersonaje);
 
         batch.end();
 
-        // ===== HUD SCORE: fijo en pantalla, dentro del fondo, pegado arriba =====
+        // ===== HUD =====
         batch.setProjectionMatrix(hudCam.combined);
         batch.begin();
 
@@ -337,16 +350,13 @@ public class PantallaJuego implements Screen {
         float uiW = scoreUI.getWidth() * SCORE_UI_SCALE;
         float uiH = scoreUI.getHeight() * SCORE_UI_SCALE;
 
-// X: dentro del fondo (zona central)
         float xUI = playMinX + HUD_INNER_MARGIN_X;
         xUI = MathUtils.clamp(xUI, playMinX, playMaxX - uiW);
 
-// Y: pegado arriba de la pantalla
         float yUI = pantallaAlto - uiH - HUD_INNER_MARGIN_Y + HUD_EXTRA_UP;
 
         batch.draw(scoreUI, xUI, yUI, uiW, uiH);
 
-// Numero al final de "SCORE"
         String s = String.valueOf(score);
         layout.setText(font, s);
 
@@ -355,24 +365,37 @@ public class PantallaJuego implements Screen {
 
         font.draw(batch, layout, xText, yText);
 
-        batch.end();
+        if (!juegoIniciado) {
+            String msg = "TOCA PARA EMPEZAR";
+            layout.setText(font, msg);
 
+            float xMsg = (pantallaAncho - layout.width) / 2f;
+            float yMsg = (pantallaAlto / 2f) + (layout.height / 2f);
+
+            font.draw(batch, layout, xMsg, yMsg);
+        }
+
+
+        batch.end();
     }
 
-    private void reciclarPlataformasPatronFijo() {
+    // Reciclado: mantiene muchas plataformas y cambia zonas
+    private void reciclarPlataformas() {
         float camBottom = cam.position.y - pantallaAlto / 2f;
 
         float maxY = -Float.MAX_VALUE;
-        for (Rectangle p : plataformas) maxY = Math.max(maxY, p.y);
+        for (Rectangle p : plataformas) if (p.y > maxY) maxY = p.y;
 
-        for (int i = 0; i < plataformas.size; i++) {
-            Rectangle p = plataformas.get(i);
+        float platW = plataformaTex.getWidth() * escalaPlataforma;
+        float areaW = (playMaxX - playMinX);
+        float zonaW = areaW / NUM_ZONAS;
 
-            if (p.y + p.height < camBottom - 80f) {
-                p.y = maxY + separacionPlataformas;
+        for (Rectangle p : plataformas) {
+            if (p.y + p.height < camBottom - 120f) {
+                p.y = maxY + separacionPlataformas + MathUtils.random(-separacionRandom, separacionRandom);
 
-                float baseX = plataformaBaseX.get(i);
-                p.x = clampPlataformaX(baseX, p.width);
+                int zona = MathUtils.random(0, NUM_ZONAS - 1);
+                p.x = xEnZona(zona, zonaW, platW);
 
                 maxY = p.y;
             }
@@ -380,7 +403,6 @@ public class PantallaJuego implements Screen {
     }
 
     private float clampZonaJugable(float x, float anchoObjeto) {
-        // Lo dejo como lo tenías (por porcentaje de pantalla)
         float min = limiteIzq;
         float max = limiteDer - anchoObjeto;
         return MathUtils.clamp(x, min, max);
